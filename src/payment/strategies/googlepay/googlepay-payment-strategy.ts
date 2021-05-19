@@ -21,6 +21,7 @@ export default class GooglePayPaymentStrategy implements PaymentStrategy {
     private _googlePayOptions?: GooglePayPaymentInitializeOptions;
     private _walletButton?: HTMLElement;
     private _paymentMethod?: PaymentMethod;
+    private _shouldShowError: boolean = true;
     private _buttonClickEventHandler?: (event: Event ) => Promise<InternalCheckoutSelectors>;
 
     constructor(
@@ -42,7 +43,7 @@ export default class GooglePayPaymentStrategy implements PaymentStrategy {
 
         this._googlePayOptions = this._getGooglePayOptions(options);
 
-        this._buttonClickEventHandler = this._handleButtlonClickedEvent(methodId);
+        this._buttonClickEventHandler = this._handleButtonClickedEvent(methodId);
 
         if (this._paymentMethod.initializationData.nonce) {
             return Promise.resolve(this._store.getState());
@@ -89,6 +90,11 @@ export default class GooglePayPaymentStrategy implements PaymentStrategy {
 
         const { methodId } = payload.payment;
 
+        if (this._paymentMethod?.initializationData.nonce !== '') {
+            const state = this._store.getState();
+            this._paymentMethod = state.paymentMethods.getPaymentMethodOrThrow(methodId);
+        }
+
         let payment = await this._getPayment(methodId);
 
         if (!payment.paymentData.nonce || !payment.paymentData.cardInformation) {
@@ -96,12 +102,13 @@ export default class GooglePayPaymentStrategy implements PaymentStrategy {
                 onError = () => {},
                 onPaymentSelect = () => {},
             } = this._googlePayOptions;
+            this._shouldShowError = false;
             await this._displayWallet(methodId, onPaymentSelect, onError);
-            payment = await this._getPayment(methodId);
+            payment = await this._getPayment(methodId, true);
+        }
 
-            if (!payment.paymentData.nonce) {
-                throw new MissingDataError(MissingDataErrorType.MissingPayment);
-            }
+        if (!payment.paymentData.nonce) {
+            throw new MissingDataError(MissingDataErrorType.MissingPayment);
         }
 
         try {
@@ -152,33 +159,36 @@ export default class GooglePayPaymentStrategy implements PaymentStrategy {
         throw new InvalidArgumentError('Unable to initialize payment because "options.googlepay" argument is not provided.');
     }
 
-    private async _getPayment(methodId: string): Promise<PaymentMethodData> {
-        if (!methodId) {
+    private async _getPayment(methodId: string, requireRenewNonce = false): Promise<PaymentMethodData> {
+        if (!methodId || !this._paymentMethod) {
             throw new NotInitializedError(NotInitializedErrorType.PaymentNotInitialized);
         }
 
-        let state = this._store.getState();
-        this._paymentMethod = state.paymentMethods.getPaymentMethodOrThrow(methodId);
+        const card_information = this._paymentMethod?.initializationData.card_information;
+        let nonce = this._paymentMethod?.initializationData.nonce;
 
-        const { nonce } = this._paymentMethod.initializationData;
         if (nonce) {
-            state = await this._store.dispatch(this._paymentMethodActionCreator.loadPaymentMethod(methodId));
-            this._paymentMethod = state.paymentMethods.getPaymentMethodOrThrow(methodId);
+            this._paymentMethod = { ...this._paymentMethod,  initializationData: { nonce: ''} };
         }
 
-        const { card_information: cardInformation } = this._paymentMethod.initializationData;
+        if (requireRenewNonce) {
+            const state = await this._store.dispatch(this._paymentMethodActionCreator.loadPaymentMethod(methodId));
+            this._paymentMethod = state.paymentMethods.getPaymentMethodOrThrow(methodId);
+            nonce = this._paymentMethod?.initializationData.nonce;
+        }
 
         return {
             methodId,
             paymentData: {
                 method: methodId,
-                cardInformation,
-                nonce: this._getNonce(methodId, this._paymentMethod),
+                cardInformation: card_information,
+                nonce: await this._encodeNonce(methodId, nonce),
             },
         };
     }
 
-    private _getNonce(methodId: string, { initializationData: { nonce }}: PaymentMethod) {
+    private async _encodeNonce(methodId: string, nonce: string) {
+        nonce = this._shouldShowError ? 'some_nonce' : nonce;
         if (methodId === 'googlepayadyenv2') {
             return JSON.stringify({
                 type: AdyenPaymentMethodType.GooglePay,
@@ -198,13 +208,23 @@ export default class GooglePayPaymentStrategy implements PaymentStrategy {
         // TODO: Revisit how we deal with GooglePaymentData after receiving it from Google
         await this._googlePayPaymentProcessor.handleSuccess(paymentData);
 
+        const state = this._store.getState();
+        this._paymentMethod = state.paymentMethods.getPaymentMethodOrThrow(methodId);
+
+        if (this._paymentMethod.initializationData.nonce) {
+            return await Promise.all([
+                this._store.dispatch(this._checkoutActionCreator.loadCurrentCheckout()),
+                this._store.getState(),
+            ]);
+        }
+
         return await Promise.all([
             this._store.dispatch(this._checkoutActionCreator.loadCurrentCheckout()),
             this._store.dispatch(this._paymentMethodActionCreator.loadPaymentMethod(methodId)),
         ]);
     }
 
-    private _handleButtlonClickedEvent(methodId: string): (event?: Event) => Promise<InternalCheckoutSelectors> {
+    private _handleButtonClickedEvent(methodId: string): (event?: Event) => Promise<InternalCheckoutSelectors> {
 
         return (event?: Event) => {
             event?.preventDefault();

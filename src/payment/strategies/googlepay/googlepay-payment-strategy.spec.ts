@@ -297,6 +297,33 @@ describe('GooglePayPaymentStrategy', () => {
             expect(googlePayPaymentProcessor.displayWallet).toBeCalled();
         });
 
+        it('gets again the payment information and get a new nonce', async () => {
+            jest.spyOn(googlePayPaymentProcessor, 'handleSuccess').mockReturnValue(Promise.resolve());
+            jest.spyOn(googlePayPaymentProcessor, 'displayWallet').mockReturnValue(getGooglePaymentDataMock());
+            jest.spyOn(store.getState().paymentMethods, 'getPaymentMethodOrThrow').mockReturnValueOnce({
+                initializationData: {
+                    nonce: '',
+                    card_information: {
+                        type: 'type',
+                        number: 'number',
+                    },
+                },
+            }).mockReturnValue({
+                initializationData: {
+                    nonce: 'newNonce',
+                    card_information: {
+                        type: 'type',
+                        number: 'number',
+                    },
+                },
+            });
+
+            await strategy.initialize(googlePayOptions);
+            await strategy.execute(getGoogleOrderRequestBody());
+
+            expect(store.getState().paymentMethods.getPaymentMethodOrThrow).toHaveBeenCalledTimes(1);
+        });
+
         it('gets again the payment information and user closes widget', async () => {
             jest.spyOn(googlePayPaymentProcessor, 'handleSuccess').mockReturnValue(Promise.resolve());
             jest.spyOn(googlePayPaymentProcessor, 'displayWallet').mockReturnValue(
@@ -371,7 +398,7 @@ describe('GooglePayPaymentStrategy', () => {
             expect(paymentActionCreator.submitPayment).toHaveBeenCalledWith({
                 methodId: 'googlepayadyenv2',
                 paymentData: {
-                    nonce: '{"type":"paywithgoogle","googlePayToken":"token","browser_info":{"color_depth":24,"java_enabled":false,"language":"en-US","screen_height":0,"screen_width":0,"time_zone_offset":"' + new Date().getTimezoneOffset().toString() + '"}}',
+                    nonce: '{"type":"paywithgoogle","googlePayToken":"some_nonce","browser_info":{"color_depth":24,"java_enabled":false,"language":"en-US","screen_height":0,"screen_width":0,"time_zone_offset":"' + new Date().getTimezoneOffset().toString() + '"}}',
                     method: 'googlepayadyenv2',
                     cardInformation: 'ci',
                 },
@@ -411,7 +438,7 @@ describe('GooglePayPaymentStrategy', () => {
             expect(paymentActionCreator.submitPayment).toHaveBeenCalledWith({
                 methodId: 'googlepayauthorizenet',
                 paymentData: {
-                    nonce: 'token',
+                    nonce: 'some_nonce',
                     method: 'googlepayauthorizenet',
                     cardInformation: 'ci',
                 },
@@ -451,7 +478,7 @@ describe('GooglePayPaymentStrategy', () => {
             expect(paymentActionCreator.submitPayment).toHaveBeenCalledWith({
                 methodId: 'googlepaystripe',
                 paymentData: {
-                    nonce: 'token',
+                    nonce: 'some_nonce',
                     method: 'googlepaystripe',
                     cardInformation: 'ci',
                 },
